@@ -334,3 +334,140 @@ def get_page_clarifications(page_id: str) -> List[Dict]:
 
     finally:
         session.close()
+
+# -- SESSION PERSISTENCE ---------------------------------------------------
+
+class PulsarSession(Base):
+    __tablename__ = "pulsar_sessions"
+
+    id = Column(String, primary_key=True)
+    page_ids = Column(JSON, default=[])
+    page_titles = Column(JSON, default={})
+    page_title_display = Column(Text, default="")
+    chunks = Column(JSON, default=[])
+    related_pages = Column(JSON, default=[])
+    past_clarifications = Column(JSON, default=[])
+    analysis_prompt = Column(Text, nullable=True)
+    tc_prompt = Column(Text, nullable=True)
+    bdd_prompt = Column(Text, nullable=True)
+    gaps = Column(JSON, default=[])
+    score = Column(JSON, default={})
+    summary = Column(Text, default="")
+    gap_reviews = Column(JSON, default={})
+    review_1_approved = Column(JSON, default=False)
+    manual_test_cases = Column(JSON, default=[])
+    bdd_test_cases = Column(JSON, default=[])
+    review_2_approved = Column(JSON, default=False)
+    review_3_approved = Column(JSON, default=False)
+    export_ready = Column(JSON, default=False)
+    exported_at = Column(Text, nullable=True)
+    current_stage = Column(String, default="human_review_1")
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+
+# -- SESSION CRUD ----------------------------------------------------------
+
+def _session_to_dict(row) -> dict:
+    return {
+        "session_id": row.id,
+        "page_ids": row.page_ids or [],
+        "page_titles": row.page_titles or {},
+        "page_title_display": row.page_title_display or "",
+        "chunks": row.chunks or [],
+        "related_pages": row.related_pages or [],
+        "past_clarifications": row.past_clarifications or [],
+        "analysis_prompt": row.analysis_prompt,
+        "tc_prompt": row.tc_prompt,
+        "bdd_prompt": row.bdd_prompt,
+        "gaps": row.gaps or [],
+        "score": row.score or {},
+        "summary": row.summary or "",
+        "gap_reviews": row.gap_reviews or {},
+        "review_1_approved": row.review_1_approved or False,
+        "manual_test_cases": row.manual_test_cases or [],
+        "bdd_test_cases": row.bdd_test_cases or [],
+        "review_2_approved": row.review_2_approved or False,
+        "review_3_approved": row.review_3_approved or False,
+        "export_ready": row.export_ready or False,
+        "exported_at": row.exported_at,
+        "current_stage": row.current_stage,
+        "error": row.error,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def session_save(data: dict) -> None:
+    db = SessionLocal()
+    try:
+        existing = db.query(PulsarSession).filter_by(id=data["session_id"]).first()
+        if existing:
+            skip = {"session_id", "created_at"}
+            for k, v in data.items():
+                if k not in skip and hasattr(existing, k):
+                    setattr(existing, k, v)
+            existing.updated_at = datetime.utcnow()
+        else:
+            skip = {"session_id"}
+            row = PulsarSession(
+                id=data["session_id"],
+                **{k: v for k, v in data.items() if k not in skip and hasattr(PulsarSession, k)}
+            )
+            db.add(row)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.error(f"session_save error: {e}")
+        raise
+    finally:
+        db.close()
+
+
+def session_get(session_id: str) -> Optional[dict]:
+    db = SessionLocal()
+    try:
+        row = db.query(PulsarSession).filter_by(id=session_id).first()
+        if not row:
+            return None
+        return _session_to_dict(row)
+    finally:
+        db.close()
+
+
+def session_list() -> list:
+    db = SessionLocal()
+    try:
+        rows = db.query(PulsarSession).order_by(PulsarSession.updated_at.desc()).all()
+        return [
+            {
+                "session_id": r.id,
+                "page_title_display": r.page_title_display,
+                "page_ids": r.page_ids,
+                "current_stage": r.current_stage,
+                "score": r.score,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            }
+            for r in rows
+        ]
+    finally:
+        db.close()
+
+
+def session_delete(session_id: str) -> bool:
+    db = SessionLocal()
+    try:
+        row = db.query(PulsarSession).filter_by(id=session_id).first()
+        if not row:
+            return False
+        db.delete(row)
+        db.commit()
+        return True
+    except Exception as e:
+        db.rollback()
+        logger.error(f"session_delete error: {e}")
+        raise
+    finally:
+        db.close()
