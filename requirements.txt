@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+requests
+python-dotenv
+sqlalchemy
+psycopg2-binary
+pgvector
+langgraph
+langchain
+beautifulsoup4
+sentence-transformers

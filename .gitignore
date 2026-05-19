@@ -3,3 +3,7 @@ venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+chromedriver.exe
+test_*.py
+app/test*.py
+src/
