@@ -193,6 +193,7 @@ def call_ai(
     system: str = "",
     max_tokens: int = 8000,
     thinking_budget: int = 5000,
+    max_retries: int = 3,
 ) -> str:
     load_dotenv(override=True)
     proxy_password = os.getenv("CORP_PROXY_PASSWORD", "")
@@ -222,21 +223,33 @@ def call_ai(
 
     logger.info(f"[call_ai] prompt_len={len(prompt)} max_tokens={max_tokens} thinking={thinking_budget}")
 
-    resp = requests.post(
-        BEDROCK_URL, headers=headers, json=body,
-        proxies=proxies, verify=False, timeout=300,
-    )
-    resp.raise_for_status()
-    data = resp.json()
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.post(
+                BEDROCK_URL, headers=headers, json=body,
+                proxies=proxies, verify=False, timeout=300,
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
-    if "content" in data and isinstance(data["content"], list):
-        for block in data["content"]:
-            if isinstance(block, dict) and block.get("type") == "text":
-                logger.info("[call_ai] Success")
-                return block["text"]
+            if "content" in data and isinstance(data["content"], list):
+                for block in data["content"]:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        logger.info(f"[call_ai] Success on attempt {attempt}")
+                        return block["text"]
 
-    raise ValueError(f"Cannot extract text from Bedrock response. Keys: {list(data.keys())}")
+            raise ValueError(f"Cannot extract text from Bedrock response. Keys: {list(data.keys())}")
 
+        except Exception as e:
+            logger.warning(f"[call_ai] Attempt {attempt}/{max_retries} failed: {e}")
+            if attempt < max_retries:
+                wait = 10 * attempt  # 10s, 20s, 30s
+                logger.info(f"[call_ai] Retrying in {wait}s...")
+                import time
+                time.sleep(wait)
+            else:
+                logger.error(f"[call_ai] All {max_retries} attempts failed")
+                raise
 def start_analysis(
     session_id: str,
     page_ids: List[str],
