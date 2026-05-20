@@ -68,11 +68,19 @@ class TCReviewRequest(BaseModel):
     session_id: str
     test_cases: List[dict] = []
     approved: bool
+    tc_prompt: Optional[str] = None
 
 class BDDReviewRequest(BaseModel):
     session_id: str
     test_cases: List[dict] = []
     approved: bool
+
+class UpdatePromptRequest(BaseModel):
+    session_id: str
+    tc_prompt: Optional[str] = None
+    bdd_prompt: Optional[str] = None
+    analysis_prompt: Optional[str] = None
+
 
 
 # ── Health ────────────────────────────────────────────────────────────────
@@ -271,6 +279,22 @@ async def export_results(session_id: str, format: str = "bdd"):
     except Exception as e:
         logger.error(f"Export error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+@app.post("/session/prompts")
+async def update_session_prompts(request: UpdatePromptRequest):
+    from app.database import session_get, session_save
+    session = session_get(request.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    updates = {"session_id": request.session_id}
+    if request.tc_prompt is not None:
+        updates["tc_prompt"] = request.tc_prompt
+    if request.bdd_prompt is not None:
+        updates["bdd_prompt"] = request.bdd_prompt
+    if request.analysis_prompt is not None:
+        updates["analysis_prompt"] = request.analysis_prompt
+    session_save(updates)
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

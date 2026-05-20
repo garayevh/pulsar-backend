@@ -1,5 +1,6 @@
-import os
+﻿import os
 import json
+import re
 import logging
 from typing import List, Dict, Optional
 from datetime import datetime
@@ -26,7 +27,6 @@ load_dotenv(override=True)
 BEDROCK_URL = "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-6/invoke"
 PROXY_HOST = "proxy.azercell.com:8080"
 PROXY_USER = "garayevh"
-
 
 DEFAULT_ANALYSIS_PROMPT = """
 You are a senior QA analyst. Analyze the following requirements from Confluence.
@@ -79,44 +79,6 @@ Respond ONLY in valid JSON, no markdown, no backticks, no explanation:
 }}
 """
 
-DEFAULT_TC_PROMPT = """
-You are a senior QA engineer. Generate comprehensive test cases in MANUAL STEPS format.
-
-Requirements:
-{requirements_text}
-
-Identified gaps and clarifications:
-{clarifications_text}
-
-Generate test cases covering:
-1. Positive scenarios (happy path)
-2. Negative scenarios (invalid inputs, boundary violations)
-3. Edge cases (limits, empty states, concurrency)
-4. Risk-based scenarios (high-impact areas from gap analysis)
-
-IMPORTANT: Use manual step-by-step format, NOT BDD.
-
-Respond ONLY in valid JSON, no markdown, no backticks, no explanation:
-{{
-  "test_cases": [
-    {{
-      "id": "TC_001",
-      "title": "Short descriptive title",
-      "type": "positive | negative | edge | risk",
-      "priority": "high | medium | low",
-      "preconditions": "System state and prerequisites",
-      "steps": [
-        "Step 1: Navigate to...",
-        "Step 2: Enter... in the field",
-        "Step 3: Click..."
-      ],
-      "expected_result": "What should happen after all steps",
-      "notes": "Optional context"
-    }}
-  ]
-}}
-"""
-
 DEFAULT_BDD_PROMPT = """
 You are a senior QA automation engineer. Convert these manual test cases into BDD format (Gherkin Given/When/Then).
 
@@ -124,7 +86,7 @@ Manual test cases:
 {manual_test_cases}
 
 Rules:
-- Keep EXACTLY the same test cases — do NOT add or remove any
+- Keep EXACTLY the same test cases - do NOT add or remove any
 - Given: system state and preconditions
 - When: the action performed
 - Then: the expected result
@@ -146,13 +108,75 @@ Respond ONLY in valid JSON, no markdown, no backticks, no explanation:
   ]
 }}
 """
+
+DEFAULT_TC_PROMPT = """
+You are a senior QA engineer. Generate comprehensive test cases.
+
+Requirements:
+{requirements_text}
+
+Identified gaps and clarifications:
+{clarifications_text}
+
+Generate test cases covering:
+1. Positive scenarios (happy path)
+2. Negative scenarios (invalid inputs, boundary violations)
+3. Edge cases (limits, empty states, concurrency)
+4. Risk-based scenarios (high-impact areas from gap analysis)
+
+Respond ONLY in valid JSON, no markdown, no backticks, no explanation:
+{{
+  "test_cases": [
+    {{
+      "id": "TC_001",
+      "summary": "Short descriptive title of what is being tested",
+      "type": "positive | negative | edge | risk",
+      "priority": "high | medium | low",
+      "preconditions": "System state and prerequisites before test execution",
+      "steps": [
+        "1. Navigate to...",
+        "2. Enter '...' in the field",
+        "3. Click the '...' button"
+      ],
+      "expected_result": "What should happen after all steps are executed",
+      "actual_result": "",
+      "notes": "Optional context or risk notes"
+    }}
+  ]
+}}
+
+Rules:
+- summary must be clear and specific (e.g. "Login fails with invalid password")
+- steps must be numbered and atomic (one action per step)
+- expected_result must be concrete and verifiable
+- actual_result leave always empty string (QA fills during execution)
+- preconditions must describe exact system state
+- generate minimum 15 test cases covering all 4 types
+"""
+
+
 def _parse_json(raw: str) -> dict:
     clean = raw.strip()
     if "```" in clean:
-        clean = clean.split("```")[1]
-        if clean.startswith("json"):
-            clean = clean[4:]
-    return json.loads(clean.strip())
+        parts = clean.split("```")
+        for part in parts:
+            part = part.strip()
+            if part.startswith("json"):
+                part = part[4:].strip()
+            if part.startswith("{"):
+                clean = part
+                break
+    start = clean.find("{")
+    end = clean.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        clean = clean[start:end+1]
+    clean = clean.strip()
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        clean = re.sub(r',\s*}', '}', clean)
+        clean = re.sub(r',\s*]', ']', clean)
+        return json.loads(clean)
 
 
 def _build_requirements_text(chunks: List[Dict]) -> str:
@@ -178,7 +202,7 @@ def _build_manual_tc_text(manual_test_cases: List[Dict]) -> str:
         steps_text = "\n".join(f"  {s}" for s in tc.get("steps", []))
         parts.append(
             f"ID: {tc['id']}\n"
-            f"Title: {tc['title']}\n"
+            f"Title: {tc.get('title') or tc.get('summary', '')}\n"
             f"Type: {tc['type']} | Priority: {tc['priority']}\n"
             f"Preconditions: {tc.get('preconditions', '')}\n"
             f"Steps:\n{steps_text}\n"
@@ -243,13 +267,15 @@ def call_ai(
         except Exception as e:
             logger.warning(f"[call_ai] Attempt {attempt}/{max_retries} failed: {e}")
             if attempt < max_retries:
-                wait = 10 * attempt  # 10s, 20s, 30s
+                wait = 10 * attempt
                 logger.info(f"[call_ai] Retrying in {wait}s...")
                 import time
                 time.sleep(wait)
             else:
                 logger.error(f"[call_ai] All {max_retries} attempts failed")
                 raise
+
+
 def start_analysis(
     session_id: str,
     page_ids: List[str],
@@ -265,13 +291,12 @@ def start_analysis(
         all_past.extend(get_page_clarifications(pid))
 
     past_text = "\n".join(
-        f"- Gap: {c['gap']} → Clarification: {c['clarification']}" for c in all_past
+        f"- Gap: {c['gap']} -> Clarification: {c['clarification']}" for c in all_past
     ) or "None"
 
-    prompt = (analysis_prompt or DEFAULT_ANALYSIS_PROMPT).format(
-        requirements_text=_build_requirements_text(chunks),
-        past_clarifications=past_text,
-    )
+    analysis_template = analysis_prompt or DEFAULT_ANALYSIS_PROMPT
+    prompt = analysis_template.replace("{requirements_text}", _build_requirements_text(chunks)).replace("{past_clarifications}", past_text)
+
     raw = call_ai(prompt, max_tokens=8000, thinking_budget=5000)
 
     try:
@@ -381,13 +406,14 @@ def submit_gap_review(
         "score": updated_score,
         "review_1_approved": False,
     }
+
+
 def _generate_manual_test_cases(session: Dict) -> List[Dict]:
-    prompt = (session.get("tc_prompt") or DEFAULT_TC_PROMPT).format(
-        requirements_text=_build_requirements_text(session.get("chunks", [])),
-        clarifications_text=_build_clarifications_text(
-            session.get("gaps", []), session.get("gap_reviews", {})
-        ),
-    )
+    tc_template = session.get("tc_prompt") or DEFAULT_TC_PROMPT
+    req_text = _build_requirements_text(session.get("chunks", []))
+    clar_text = _build_clarifications_text(session.get("gaps", []), session.get("gap_reviews", {}))
+    prompt = tc_template.replace("{requirements_text}", req_text).replace("{clarifications_text}", clar_text)
+
     raw = call_ai(prompt, max_tokens=32000, thinking_budget=4000)
 
     try:
@@ -406,9 +432,9 @@ def _generate_manual_test_cases(session: Dict) -> List[Dict]:
 
 def _generate_bdd_test_cases(session: Dict) -> List[Dict]:
     manual_tcs = session.get("manual_test_cases", [])
-    prompt = (session.get("bdd_prompt") or DEFAULT_BDD_PROMPT).format(
-        manual_test_cases=_build_manual_tc_text(manual_tcs),
-    )
+    bdd_template = session.get("bdd_prompt") or DEFAULT_BDD_PROMPT
+    prompt = bdd_template.replace("{manual_test_cases}", _build_manual_tc_text(manual_tcs))
+
     raw = call_ai(prompt, max_tokens=32000, thinking_budget=4000)
 
     try:
@@ -505,10 +531,10 @@ def submit_bdd_review(
     for tc in test_cases:
         exported.append({
             "id": tc["id"],
-            "title": tc["title"],
+            "title": tc.get("title") or tc.get("summary", ""),
             "type": tc["type"],
             "priority": tc["priority"],
-            "bdd": f"Scenario: {tc['title']}\n  Given {tc['given']}\n  When {tc['when']}\n  Then {tc['then']}",
+            "bdd": tc.get('bdd') or f"Scenario: {tc.get('title') or tc.get('summary', '')}\n  Given {tc.get('given', '')}\n  When {tc.get('when', '')}\n  Then {tc.get('then', '')}",
             "raw": tc,
             "source_pages": tc.get("source_pages", []),
             "manually_edited": tc.get("manually_edited", False),

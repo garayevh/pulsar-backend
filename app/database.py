@@ -1,4 +1,4 @@
-import os
+﻿import os
 from dotenv import load_dotenv
 from typing import List, Dict, Optional
 import logging
@@ -447,6 +447,9 @@ def session_list() -> list:
                 "page_ids": r.page_ids,
                 "current_stage": r.current_stage,
                 "score": r.score,
+                "gaps_count": len(r.gaps or []),
+                "tc_count": len(r.manual_test_cases or []),
+                "bdd_count": len(r.bdd_test_cases or []),
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "updated_at": r.updated_at.isoformat() if r.updated_at else None,
             }
@@ -471,3 +474,4 @@ def session_delete(session_id: str) -> bool:
         raise
     finally:
         db.close()
+
