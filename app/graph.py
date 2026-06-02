@@ -284,6 +284,7 @@ def start_analysis(
     analysis_prompt: str = None,
     tc_prompt: str = None,
     bdd_prompt: str = None,
+    figma_frames: list = None,
 ) -> Dict:
     related = find_related_pages(page_ids, limit=5)
     all_past = []
@@ -294,8 +295,18 @@ def start_analysis(
         f"- Gap: {c['gap']} -> Clarification: {c['clarification']}" for c in all_past
     ) or "None"
 
+    figma_context = ""
+    if figma_frames:
+        frame_list = "\n".join(
+            f"  - [{f.get('type', 'FRAME')}] {f['name']}" + (f" (page: {f['page']})" if 'page' in f else "")
+            for f in figma_frames
+        )
+        figma_context = f"\n\nFigma Design Context (frame names from linked mockup):\n{frame_list}\nUse these frame names to identify missing UI scenarios and edge cases.\n"
+
+    requirements_with_figma = _build_requirements_text(chunks) + figma_context
+
     analysis_template = analysis_prompt or DEFAULT_ANALYSIS_PROMPT
-    prompt = analysis_template.replace("{requirements_text}", _build_requirements_text(chunks)).replace("{past_clarifications}", past_text)
+    prompt = analysis_template.replace("{requirements_text}", requirements_with_figma).replace("{past_clarifications}", past_text)
 
     raw = call_ai(prompt, max_tokens=8000, thinking_budget=5000)
 
@@ -318,6 +329,7 @@ def start_analysis(
         "analysis_prompt": analysis_prompt,
         "tc_prompt": tc_prompt,
         "bdd_prompt": bdd_prompt,
+        "figma_frames": figma_frames or [],
         "gaps": result.get("gaps", []),
         "score": result.get("score", {}),
         "summary": result.get("summary", ""),

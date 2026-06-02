@@ -7,6 +7,7 @@ from pydantic import BaseModel
 import uvicorn
 
 from app.confluence import ConfluenceClient
+from app.figma import fetch_figma_frames
 from app.database import create_tables, save_chunks, find_related_pages
 from app.graph import (
     start_analysis,
@@ -124,7 +125,19 @@ async def get_related_pages(page_ids: str, limit: int = 5):
         logger.error(f"Related pages error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# ── Figma ─────────────────────────────────────────────────────────────────
 
+@app.get("/figma/frames")
+async def get_figma_frames(url: str):
+    try:
+        frames = fetch_figma_frames(url)
+        return {"frames": frames, "total": len(frames)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Figma fetch error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
 # ── Sessions (History) ────────────────────────────────────────────────────
 
 @app.get("/sessions")
